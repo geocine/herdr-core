@@ -215,7 +215,11 @@ paths start at your current folder. Prefer explicit paths for remote work.
   connections. Host displays (including SSH forwarding) stay as they are.
   A missing `XAUTHORITY` file does not remove a display.
 - `hc keep <t>` (or `run --keep`) replaces a lost program with a shell,
-  never reruns a task. `hc keep <t> --off` disables recovery. Signal death
+  never reruns a task. The shell starts in its last folder, under its saved
+  screen (saved every 30 s while it prints). If Claude Code, Codex or
+  OpenCode was running, the shell starts it in its resume mode
+  (`claude --continue`, `codex resume --last`, `opencode --continue`);
+  `resume_agents = false` in config.toml turns that off. `hc keep <t> --off` disables recovery. Signal death
   without an exit code is loss too. After a grace delay, recovery runs on
   every OS, including after a host shutdown. On macOS, shutdown warnings
   preserve kept programs even if they catch a signal and exit with a code;
