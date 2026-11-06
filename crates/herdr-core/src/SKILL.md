@@ -218,7 +218,8 @@ paths start at your current folder. Prefer explicit paths for remote work.
   never reruns a task. The shell starts in its last folder, under its saved
   screen (saved every 30 s while it prints). If Claude Code, Codex or
   OpenCode was running, the shell starts it in its resume mode
-  (`claude --continue`, `codex resume --last`, `opencode --continue`);
+  (Claude Code: its own conversation, `claude --resume <id>`, read from
+  `~/.claude/sessions/<pid>.json`; `codex resume --last`; `opencode --continue`);
   `resume_agents = false` in config.toml turns that off. `hc keep <t> --off` disables recovery. Signal death
   without an exit code is loss too. After a grace delay, recovery runs on
   every OS, including after a host shutdown. On macOS, shutdown warnings

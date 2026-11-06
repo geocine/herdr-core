@@ -13,7 +13,13 @@ pub fn command(f: &Foreground) -> Option<Vec<String>> {
         let base = lower.rsplit('/').next().unwrap_or(&lower);
         let base = [".exe", ".cmd", ".ps1", ".js", ".mjs"].iter().fold(base, |b, ext| b.strip_suffix(ext).unwrap_or(b));
         let cmd: &[&str] = if base == "claude" || lower.contains("@anthropic-ai/claude-code") {
-            &["claude", "--continue"]
+            // This process's own conversation, so two in one folder each get theirs back;
+            // one with no message yet isn't saved, so that one starts fresh.
+            match claude_session(f.pid) {
+                Some((id, true)) => return Some(vec!["claude".into(), "--resume".into(), id]),
+                Some((_, false)) => &["claude"],
+                None => &["claude", "--continue"],
+            }
         } else if base == "codex" || lower.contains("@openai/codex") {
             &["codex", "resume", "--last"]
         } else if base == "opencode" || lower.contains("opencode-ai") {
@@ -24,6 +30,36 @@ pub fn command(f: &Foreground) -> Option<Vec<String>> {
         return Some(cmd.iter().map(|s| (*s).to_owned()).collect());
     }
     None
+}
+
+/// The conversation a running Claude Code is in, and whether it is saved yet:
+/// Claude keeps `~/.claude/sessions/<pid>.json` current and saves a conversation,
+/// from its first message, as `projects/<folder>/<id>.jsonl` (`CLAUDE_CONFIG_DIR`
+/// moves `~/.claude`).
+fn claude_session(pid: i32) -> Option<(String, bool)> {
+    let dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|h| h.join(".claude")))?;
+    let (id, cwd) = session_id(&std::fs::read(dir.join("sessions").join(format!("{pid}.json"))).ok()?, pid)?;
+    let saved = dir.join("projects").join(project_folder(&cwd)).join(format!("{id}.jsonl")).is_file();
+    Some((id, saved))
+}
+
+/// `sessionId` and `cwd` from a Claude Code session file, when it is this process's and the id looks like one.
+fn session_id(file: &[u8], pid: i32) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_slice(file).ok()?;
+    if v["pid"].as_i64() != Some(pid as i64) {
+        return None;
+    }
+    let id = v["sessionId"].as_str()?;
+    let cwd = v["cwd"].as_str().unwrap_or_default();
+    (!id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .then(|| (id.to_owned(), cwd.to_owned()))
+}
+
+/// Claude's folder name for a project: every character but letters and digits as `-`.
+fn project_folder(cwd: &str) -> String {
+    cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
 }
 
 /// `shell` running `cmd`, then staying as an interactive shell when it ends;
@@ -114,6 +150,17 @@ mod tests {
         let text = screen.plain_text();
         let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.is_empty()).collect();
         assert_eq!(lines, ["$ echo one", "one", "$", "-- restored after restart --", "new prompt"]);
+    }
+
+    #[test]
+    fn claude_resumes_its_own_session() {
+        let file = br#"{"pid":19204,"sessionId":"a6525362-cde8-43e2-8b43-74775173664b","cwd":"C:\\x"}"#;
+        let (id, cwd) = session_id(file, 19204).unwrap();
+        assert_eq!(id, "a6525362-cde8-43e2-8b43-74775173664b");
+        assert_eq!(project_folder(&cwd), "C--x");
+        assert_eq!(project_folder(r"C:\Aivan\PL\herdr"), "C--Aivan-PL-herdr");
+        assert_eq!(session_id(file, 1), None, "another process's file");
+        assert_eq!(session_id(br#"{"pid":1,"sessionId":"x; rm -rf /"}"#, 1), None);
     }
 
     #[test]
