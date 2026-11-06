@@ -35,6 +35,10 @@ pub struct Config {
     /// timeout on top), and to send anything at all before its line is
     /// given up and dialed again (default 30).
     pub machine_timeout: Option<f64>,
+    /// Start a known agent (Claude Code, Codex, OpenCode) again in its resume
+    /// mode when a kept terminal it ran in comes back after a reboot or crash
+    /// (default on). Off: a plain shell, as before.
+    pub resume_agents: Option<bool>,
 }
 
 fn seconds<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
@@ -68,6 +72,10 @@ impl Config {
 
     pub fn machine_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_secs_f64(self.machine_timeout.filter(|s| s.is_finite() && *s > 0.0).unwrap_or(30.0))
+    }
+
+    pub fn resume_agents(&self) -> bool {
+        self.resume_agents.unwrap_or(true)
     }
 
     pub fn history_bytes(&self) -> usize {

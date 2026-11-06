@@ -24,6 +24,7 @@ pub mod relay;
 pub mod releases;
 pub mod remote;
 mod restart;
+pub mod resume;
 pub mod rpc;
 pub mod runtime;
 pub mod server;

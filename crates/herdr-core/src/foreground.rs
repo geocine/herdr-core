@@ -186,6 +186,12 @@ impl Core {
                 if let Some(f) = &now {
                     t.last_cwd = Some(f.cwd.clone());
                 }
+                // The agent to resume if this terminal is lost; a shutdown ending the agent first keeps it.
+                match now.as_ref().and_then(crate::resume::command) {
+                    Some(cmd) => t.resume = Some(cmd),
+                    None if !crate::platform::host_shutdown_in_progress() => t.resume = None,
+                    None => {}
+                }
                 t.foreground = now.clone();
                 if change.is_some() || foreground_changed {
                     self.save_soon();

@@ -30,6 +30,48 @@ impl Terminal {
 const RESTORED: &[u8] = b"\x1b[0m\r\n\x1b[2m-- the program above ended; this is a new shell --\x1b[0m\r\n";
 
 impl Core {
+    /// Saves each kept terminal's screen every 30 s when it printed since (in a pause), so
+    /// one lost with its machine (a reboot) comes back with its history.
+    pub(crate) async fn keep_screens(self: Arc<Self>) {
+        let mut saved: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let due: Vec<(u32, u64, Vec<u8>)> = {
+                let st = self.lock();
+                saved.retain(|id, _| st.screens.contains_key(id));
+                st.screens
+                    .iter()
+                    .filter(|(id, _)| st.reg.terminals.get(id).is_some_and(|t| t.keep && t.is_live()))
+                    // Between bursts only: a printing agent is never held up, and is saved when it pauses.
+                    .filter(|(id, _)| {
+                        st.last_output.get(id).is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(2))
+                    })
+                    .filter_map(|(id, screen)| {
+                        let seq = st.output_seq.get(id).copied().unwrap_or(0);
+                        (saved.get(id) != Some(&seq)).then(|| screen.snapshot().map(|snap| (*id, seq, snap))).flatten()
+                    })
+                    .collect()
+            };
+            for (id, seq, snap) in due {
+                // Written aside, then moved in only while the terminal still runs here:
+                // a finished one's final screen (saved under the lock) is never replaced.
+                let path = self.snapshot_path(id);
+                let aside = path.with_extension("kept");
+                if std::fs::create_dir_all(path.parent().expect("screens dir")).is_err()
+                    || std::fs::write(&aside, &snap).is_err()
+                {
+                    continue;
+                }
+                let st = self.lock();
+                if st.screens.contains_key(&id) && std::fs::rename(&aside, &path).is_ok() {
+                    saved.insert(id, seq);
+                } else {
+                    let _ = std::fs::remove_file(&aside);
+                }
+            }
+        }
+    }
+
     pub(crate) fn spawn_failed(&self, st: &mut crate::runtime::State, id: u32) {
         let t = st.reg.terminals.get_mut(&id).expect("failed spawn");
         t.holder = None;
@@ -56,10 +98,10 @@ impl Core {
             let _ = writeln!(io::stderr(), "core: kept terminals waiting for a holder: {e}");
             return;
         }
-        let (shell, restore_screen) = match crate::config::load(&self.paths.config)
-            .and_then(|settings| settings.shell().map(|shell| (shell, settings.restore_screen.unwrap_or(false))))
-        {
-            Ok(settings) => settings,
+        let config = crate::config::load(&self.paths.config);
+        let resume_agents = config.as_ref().is_ok_and(|c| c.resume_agents());
+        let shell = match config.and_then(|settings| settings.shell()) {
+            Ok(shell) => shell,
             Err(e) => {
                 let _ = writeln!(io::stderr(), "core: kept terminals waiting for a shell: {}", e.message);
                 return;
@@ -98,7 +140,9 @@ impl Core {
             let (env, scope) = crate::api::terminal_env(&self, id, &cwd, env);
             t.scope = Some(scope);
             t.holder = Some(instance);
-            t.argv = shell.clone();
+            // A lost agent comes back in its resume mode inside the shell; anything else as the shell.
+            let resume = t.resume.take().filter(|_| resume_agents);
+            t.argv = resume.and_then(|cmd| crate::resume::launch(&shell, &cmd)).unwrap_or_else(|| shell.clone());
             t.cwd = cwd.clone();
             t.template = None;
             t.reported = false;
@@ -111,25 +155,21 @@ impl Core {
             t.stop = None;
             t.paste_gap_ms = None;
             let spawn = proto::Spawn { argv: t.argv.clone(), env, cwd, cols: t.cols, rows: t.rows };
-            let identity = t.identity.clone();
-            if !restore_screen {
-                let _ = std::fs::remove_file(self.snapshot_path(id));
-            }
-            // A retry after a failed spawn keeps the screen the first try built.
-            let mut screen = st.screens.remove(&id).filter(|_| restore_screen).unwrap_or_else(|| {
-                let mut screen = ghostty_vt::Terminal::new(spawn.cols, spawn.rows, self.history_bytes());
-                if restore_screen && let Some(old) = self.take_saved_screen(id) {
-                    screen.write(&old.replay());
-                    screen.write(RESTORED);
-                    // ConPTY paints a new console from the top left: move what was there into history.
-                    if cfg!(windows) {
-                        screen.write(&b"\n".repeat(spawn.rows as usize));
-                        screen.write(b"\x1b[H");
-                    }
+            // The screen as it was last saved (scrollback and all), marked, else a fresh one.
+            let saved = std::fs::read(self.snapshot_path(id))
+                .ok()
+                .and_then(|bytes| ghostty_vt::Terminal::restore(&bytes, self.history_bytes()));
+            let t = st.reg.terminals.get_mut(&id).expect("pending");
+            let mut screen = match saved {
+                Some(mut screen) => {
+                    screen.resize(t.cols, t.rows);
+                    crate::resume::mark_restored(&mut screen, t.rows);
+                    t.screen = "inexact".into();
+                    screen
                 }
-                screen
-            });
-            screen.set_xtversion(&identity);
+                None => ghostty_vt::Terminal::new(t.cols, t.rows, self.history_bytes()),
+            };
+            screen.set_xtversion(&t.identity);
             st.screens.insert(id, screen);
             // Claim and queue the snapshot before sending: a slow holder never gets a second spawn.
             // If a crash leaves the spawn unrecorded, the next start kills it.
