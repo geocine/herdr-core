@@ -159,7 +159,7 @@ impl Core {
             let mut screen = match saved {
                 Some(mut screen) => {
                     screen.resize(t.cols, t.rows);
-                    crate::resume::mark_restored(&mut screen, t.rows);
+                    crate::resume::keep_restored(&mut screen, t.rows);
                     t.screen = "inexact".into();
                     screen
                 }
