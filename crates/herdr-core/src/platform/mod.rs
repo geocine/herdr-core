@@ -221,6 +221,9 @@ pub use windows_exec::*;
 #[cfg(windows)]
 mod windows_env;
 #[cfg(windows)]
+// geocine: Windows' foreground comes from `windows::foreground_of`, which walks through
+// Git Bash's chain of bash.exe to the program; upstream's one-level version stays unused.
+#[allow(dead_code)]
 mod windows_foreground;
 #[cfg(windows)]
 mod windows_session;
