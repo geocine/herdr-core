@@ -26,6 +26,9 @@ pub struct Terminal {
     /// The agent to start again, in its resume mode, when this lost terminal comes back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<Vec<String>>,
+    /// Since when the agent behind `resume` has been gone (ms), while it is kept for a shutdown.
+    #[serde(skip)]
+    pub resume_gone_ms: Option<u64>,
     /// Only caller overrides, never the inherited core environment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub restart_env: BTreeMap<String, String>,
@@ -267,6 +270,7 @@ impl Registry {
                 keep: new.keep,
                 last_cwd: None,
                 resume: None,
+                resume_gone_ms: None,
                 restart_env: BTreeMap::new(),
                 restart_after_ms: 0,
                 restart_delay_ms: 0,

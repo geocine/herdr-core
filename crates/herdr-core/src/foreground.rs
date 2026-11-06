@@ -171,13 +171,19 @@ impl Core {
                     f.cwd = cwd.clone();
                 }
                 // The agent to resume if this terminal is lost, kept current as its session
-                // changes; a shutdown ending the agent first keeps it.
-                if let Some(t) = st.reg.terminals.get_mut(&id).filter(|t| t.is_live())
-                    && t.resume != resume
-                    && (resume.is_some() || !crate::platform::host_shutdown_in_progress())
-                {
-                    t.resume = resume;
-                    self.save_soon();
+                // changes. A gone agent is forgotten only after a while: a shutdown ends agents
+                // before the core, and Windows doesn't always say it is shutting down by then.
+                if let Some(t) = st.reg.terminals.get_mut(&id).filter(|t| t.is_live()) {
+                    let now_ms = crate::runtime::now_ms();
+                    if track_resume(
+                        &mut t.resume,
+                        &mut t.resume_gone_ms,
+                        resume,
+                        now_ms,
+                        crate::platform::host_shutdown_in_progress(),
+                    ) {
+                        self.save_soon();
+                    }
                 }
                 let Some(t) = st.reg.terminals.get_mut(&id).filter(|t| t.is_live() && t.foreground != now) else {
                     continue;
@@ -190,5 +196,73 @@ impl Core {
                 self.emit(&mut st, "foreground", id, serde_json::to_value(&now).unwrap_or_default());
             }
         }
+    }
+}
+
+/// How long an agent that ended is still resumed if its terminal is lost.
+const RESUME_GRACE_MS: u64 = 60_000;
+
+/// Keeps `kept` (the agent to resume) current with `now` (the agent in front,
+/// if any). An agent that is gone stays for `RESUME_GRACE_MS` (for good while
+/// the host shuts down), so one a shutdown or reboot ends before the core
+/// still comes back. Whether `kept` changed (to save).
+fn track_resume(
+    kept: &mut Option<Vec<String>>,
+    gone_since: &mut Option<u64>,
+    now: Option<Vec<String>>,
+    now_ms: u64,
+    shutting_down: bool,
+) -> bool {
+    if now.is_some() {
+        *gone_since = None;
+        if *kept == now {
+            return false;
+        }
+        *kept = now;
+        return true;
+    }
+    if kept.is_none() || shutting_down {
+        return false;
+    }
+    let since = *gone_since.get_or_insert(now_ms);
+    if now_ms.saturating_sub(since) < RESUME_GRACE_MS {
+        return false;
+    }
+    *kept = None;
+    *gone_since = None;
+    true
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+
+    fn claude() -> Option<Vec<String>> {
+        Some(vec!["claude".into(), "--resume".into(), "abc".into()])
+    }
+
+    #[test]
+    fn an_agent_that_ends_is_still_resumed_for_a_while() {
+        let (mut kept, mut since) = (None, None);
+        assert!(track_resume(&mut kept, &mut since, claude(), 0, false));
+        assert!(!track_resume(&mut kept, &mut since, claude(), 500, false));
+        // Ended (a reboot ending it before the core, unannounced): still kept.
+        assert!(!track_resume(&mut kept, &mut since, None, 1_000, false));
+        assert!(!track_resume(&mut kept, &mut since, None, 1_000 + RESUME_GRACE_MS - 1, false));
+        assert_eq!(kept, claude());
+        // Gone for good after the grace.
+        assert!(track_resume(&mut kept, &mut since, None, 1_000 + RESUME_GRACE_MS, false));
+        assert_eq!(kept, None);
+    }
+
+    #[test]
+    fn a_shutdown_never_forgets_and_a_new_agent_replaces_at_once() {
+        let (mut kept, mut since) = (claude(), None);
+        assert!(!track_resume(&mut kept, &mut since, None, 0, true));
+        assert!(!track_resume(&mut kept, &mut since, None, 10 * RESUME_GRACE_MS, true));
+        assert_eq!(kept, claude());
+        let codex = Some(vec!["codex".into(), "resume".into(), "--last".into()]);
+        assert!(track_resume(&mut kept, &mut since, codex.clone(), 10 * RESUME_GRACE_MS, false));
+        assert_eq!((kept, since), (codex, None));
     }
 }

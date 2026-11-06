@@ -94,12 +94,20 @@ pub fn launch(shell: &[String], cmd: &[String]) -> Option<Vec<String>> {
     }
 }
 
-/// What a restored screen gets before the new program prints: back to the
-/// main screen with default modes (the old program may have left an alternate
-/// screen, mouse reporting or a hidden cursor), a marked line, then everything
+/// The old program's modes, off: what it asked of the terminal is not what the
+/// new shell wants. Left on, they make the terminal type at the shell: color
+/// scheme reports (2031: `997;1n` at the prompt when the app sets colors),
+/// mouse, focus and resize reports, kitty keys. Then the main screen, a shown
+/// cursor and plain text. Kitty key flags on both screens (each keeps its own).
+const OLD_MODES_OFF: &[u8] = b"\x1b[?2026l\x1b[?1049h\x1b[=0;1u\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[=0;1u\x1b[>4;0m\
+\x1b[?1l\x1b[?66l\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\
+\x1b[?1016l\x1b[?2004l\x1b[?2031l\x1b[?2033l\x1b[?2048l\x1b[?25h\x1b[0m";
+
+/// What a restored screen gets before the new program prints: the old
+/// program's modes off (`OLD_MODES_OFF`), a marked line, then everything
 /// scrolled up into history, since a new console clears the screen it starts on.
 pub fn mark_restored(screen: &mut ghostty_vt::Terminal, rows: u16) {
-    screen.write(b"\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1004l\x1b[?25h\x1b[0m");
+    screen.write(OLD_MODES_OFF);
     let shown = screen.screen_rows();
     let Some(last) = shown.iter().rposition(|row| !row.trim().is_empty()) else { return };
     screen.write(restored(last as u16 + 1, rows).as_slice());
@@ -150,6 +158,20 @@ mod tests {
         let text = screen.plain_text();
         let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.is_empty()).collect();
         assert_eq!(lines, ["$ echo one", "one", "$", "-- restored after restart --", "new prompt"]);
+    }
+
+    #[test]
+    fn a_restored_screen_does_not_answer_for_the_old_program() {
+        // Claude in its alternate screen, reporting color scheme changes, mouse and focus.
+        let mut screen = ghostty_vt::Terminal::new(40, 6, 1 << 20);
+        screen.write(b"$ claude\r\n\x1b[?1049h\x1b[?2031h\x1b[?1000h\x1b[?1004h\x1b[>1uClaude");
+        screen.take_responses();
+        mark_restored(&mut screen, 6);
+        assert!(!screen.alt_screen());
+        assert!([2031, 1000, 1004].iter().all(|&m| !screen.dec_mode(m)));
+        // The app setting its colors no longer types `997;1n` at the new shell's prompt.
+        screen.set_display(Some([1, 2, 3]), Some([255; 3]), None, None);
+        assert_eq!(screen.take_responses(), b"");
     }
 
     #[test]
