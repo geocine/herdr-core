@@ -159,8 +159,15 @@ impl Core {
             let live: Vec<u32> = self.lock().reg.terminals.values().filter(|t| t.is_live()).map(|t| t.id()).collect();
             for id in live {
                 let pgid = self.foreground(id).await;
-                let now = (pgid > 0).then(|| about(pgid)).flatten();
+                let mut now = (pgid > 0).then(|| about(pgid)).flatten();
                 let mut st = self.lock();
+                #[cfg(windows)]
+                if let (Some(f), Some(t)) = (now.as_mut(), st.reg.terminals.get(&id))
+                    && f.name.eq_ignore_ascii_case("bash.exe")
+                    && let Some(cwd) = &t.last_cwd
+                {
+                    f.cwd = cwd.clone();
+                }
                 let Some(t) = st.reg.terminals.get_mut(&id).filter(|t| t.is_live() && t.foreground != now) else {
                     continue;
                 };

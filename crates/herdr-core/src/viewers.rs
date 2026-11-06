@@ -125,6 +125,7 @@ impl Core {
         let (out, recovered) =
             if recovering { relay.feed_to_ground(screen, bytes) } else { (relay.feed(screen, bytes), None) };
         let win32_input = relay.win32_input.take();
+        let cwd_report = relay.cwd_report.take();
         if let Some(watchers) = output_watch.get_mut(&id).filter(|_| !scrolling) {
             watchers.retain(|w| w.send(out.clone()).is_ok());
         }
@@ -141,6 +142,30 @@ impl Core {
             t.win32_input = on;
             self.save(st);
         }
+        #[cfg(windows)]
+        if let Some(cwd) = cwd_report.filter(|cwd| std::path::Path::new(cwd).is_dir()) {
+            let changed = if let Some(t) = st.reg.terminals.get_mut(&id) {
+                t.last_cwd = Some(cwd.clone());
+                if let Some(f) = t.foreground.as_mut().filter(|f| f.name.eq_ignore_ascii_case("bash.exe")) {
+                    if f.cwd != cwd {
+                        f.cwd = cwd;
+                        Some(f.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(f) = changed {
+                self.save_soon();
+                self.emit(st, "foreground", id, serde_json::to_value(f).unwrap_or_default());
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = cwd_report;
         let recovered = recovered.map(|(at, paint)| {
             let mut paint = paint_state(st, id, paint);
             paint.extend_from_slice(&out[at..]);

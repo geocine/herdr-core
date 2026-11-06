@@ -22,6 +22,8 @@ pub struct Relay {
     /// The program's latest win32-input-mode request (DEC 9001, ConPTY's ask
     /// for key events), until taken. The screen doesn't keep it.
     pub win32_input: Option<bool>,
+    /// Latest OSC 9;9 working directory reported by the shell.
+    pub cwd_report: Option<String>,
 }
 
 enum Seq {
@@ -75,6 +77,9 @@ impl Relay {
                 } else {
                     if let Some(on) = win32_input(&seq) {
                         self.win32_input = Some(on);
+                    }
+                    if let Some(cwd) = windows_cwd_report(&seq) {
+                        self.cwd_report = Some(cwd);
                     }
                     if seq == b"\x1b_" {
                         self.apc = Some(screen.pending_responses());
@@ -148,6 +153,15 @@ impl Relay {
     }
 }
 
+fn windows_cwd_report(seq: &[u8]) -> Option<String> {
+    let body = seq.strip_prefix(b"\x1b]9;9;")?;
+    let body = body.strip_suffix(b"\x07").or_else(|| body.strip_suffix(b"\x1b\\"))?;
+    let cwd = std::str::from_utf8(body).ok()?;
+    (cwd.len() >= 3 && cwd.as_bytes()[1] == b':' && cwd.as_bytes()[2] == b'\\'
+        && cwd.as_bytes()[0].is_ascii_alphabetic())
+    .then(|| cwd.to_owned())
+}
+
 /// `CSI ? … 9001 … h` or `l`: whether it turns win32-input-mode on.
 fn win32_input(seq: &[u8]) -> Option<bool> {
     let (last, params) = seq.strip_prefix(b"\x1b[?")?.split_last()?;
@@ -172,6 +186,16 @@ mod tests {
 
     fn feed_bytewise(relay: &mut Relay, screen: &mut Screen, input: &[u8]) -> Vec<u8> {
         input.iter().flat_map(|b| relay.feed(screen, std::slice::from_ref(b))).collect()
+    }
+
+    #[test]
+    fn keeps_the_last_windows_shell_directory_report_across_output_chunks() {
+        let mut screen = Screen::new(80, 24, 1 << 20);
+        let mut relay = Relay::default();
+        let output = b"prompt\x1b]9;9;D:\\PL\\games\x1b\\ more\x1b]9;9;D:\\PL\\ai-toolkit\x07";
+        assert_eq!(feed_bytewise(&mut relay, &mut screen, output), output);
+        assert_eq!(relay.cwd_report.take().as_deref(), Some(r"D:\PL\ai-toolkit"));
+        assert!(relay.cwd_report.is_none());
     }
 
     #[test]
