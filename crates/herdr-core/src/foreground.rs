@@ -165,6 +165,8 @@ impl Core {
             for id in live {
                 let pgid = self.foreground(id).await;
                 let mut now = (pgid > 0).then(|| about(pgid)).flatten();
+                // Read before the lock: it may read an agent's session file.
+                let resume = now.as_ref().and_then(crate::resume::command);
                 let mut st = self.lock();
                 #[cfg(windows)]
                 if let (Some(f), Some(t)) = (now.as_mut(), st.reg.terminals.get(&id))
@@ -172,6 +174,15 @@ impl Core {
                     && let Some(cwd) = &t.last_cwd
                 {
                     f.cwd = cwd.clone();
+                }
+                // The agent to resume if this terminal is lost, kept current as its session
+                // changes; a shutdown ending the agent first keeps it.
+                if let Some(t) = st.reg.terminals.get_mut(&id).filter(|t| t.is_live())
+                    && t.resume != resume
+                    && (resume.is_some() || !crate::platform::host_shutdown_in_progress())
+                {
+                    t.resume = resume;
+                    self.save_soon();
                 }
                 let Some(t) = st.reg.terminals.get_mut(&id).filter(|t| t.is_live()) else {
                     continue;
@@ -185,12 +196,6 @@ impl Core {
                 let foreground_changed = t.foreground != now;
                 if let Some(f) = &now {
                     t.last_cwd = Some(f.cwd.clone());
-                }
-                // The agent to resume if this terminal is lost; a shutdown ending the agent first keeps it.
-                match now.as_ref().and_then(crate::resume::command) {
-                    Some(cmd) => t.resume = Some(cmd),
-                    None if !crate::platform::host_shutdown_in_progress() => t.resume = None,
-                    None => {}
                 }
                 t.foreground = now.clone();
                 if change.is_some() || foreground_changed {
