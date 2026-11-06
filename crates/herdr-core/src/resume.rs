@@ -104,21 +104,21 @@ const OLD_MODES_OFF: &[u8] = b"\x1b[?2026l\x1b[?1049h\x1b[=0;1u\x1b[?1049l\x1b[?
 \x1b[?1016l\x1b[?2004l\x1b[?2031l\x1b[?2033l\x1b[?2048l\x1b[?25h\x1b[0m";
 
 /// What a restored screen gets before the new program prints: the old
-/// program's modes off (`OLD_MODES_OFF`), a marked line, then everything
-/// scrolled up into history, since a new console clears the screen it starts on.
-pub fn mark_restored(screen: &mut ghostty_vt::Terminal, rows: u16) {
+/// program's modes off (`OLD_MODES_OFF`), then its lines scrolled up into
+/// history, since a new console clears the screen it starts on. The new
+/// program's output follows right under them, as if it had carried on.
+pub fn keep_restored(screen: &mut ghostty_vt::Terminal, rows: u16) {
     screen.write(OLD_MODES_OFF);
     let shown = screen.screen_rows();
     let Some(last) = shown.iter().rposition(|row| !row.trim().is_empty()) else { return };
     screen.write(restored(last as u16 + 1, rows).as_slice());
 }
 
-/// The bytes after the modes: the mark under the last line with text (row
-/// `last`, from 1), then exactly the lines up to the mark scrolled into history.
+/// The bytes after the modes: exactly the lines up to the last one with text
+/// (row `last`, from 1) scrolled into history, the cursor home.
 fn restored(last: u16, rows: u16) -> Vec<u8> {
-    let mut out = format!("\x1b[{last};1H\r\n\x1b[2m-- restored after restart --\x1b[0m").into_bytes();
-    out.extend(format!("\x1b[{rows};1H").bytes());
-    out.extend(std::iter::repeat_n(b'\n', (last + 1).min(rows) as usize));
+    let mut out = format!("\x1b[{rows};1H").into_bytes();
+    out.extend(std::iter::repeat_n(b'\n', last.min(rows) as usize));
     out.extend(b"\x1b[H");
     out
 }
@@ -149,15 +149,19 @@ mod tests {
     }
 
     #[test]
-    fn a_restored_screen_keeps_its_lines_in_history_with_a_mark_after_them() {
+    fn a_restored_screen_keeps_its_lines_in_history_right_above_the_new_ones() {
         let mut screen = ghostty_vt::Terminal::new(40, 6, 1 << 20);
         screen.write(b"$ echo one\r\none\r\n$ ");
-        mark_restored(&mut screen, 6);
+        keep_restored(&mut screen, 6);
         // The new console clears the screen it starts on.
         screen.write(b"\x1b[2J\x1b[Hnew prompt");
         let text = screen.plain_text();
-        let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.is_empty()).collect();
-        assert_eq!(lines, ["$ echo one", "one", "$", "-- restored after restart --", "new prompt"]);
+        let mut lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+        while lines.last() == Some(&"") {
+            lines.pop();
+        }
+        // No gap and no mark: the new prompt carries on right under the old lines.
+        assert_eq!(lines, ["$ echo one", "one", "$", "new prompt"]);
     }
 
     #[test]
@@ -166,7 +170,7 @@ mod tests {
         let mut screen = ghostty_vt::Terminal::new(40, 6, 1 << 20);
         screen.write(b"$ claude\r\n\x1b[?1049h\x1b[?2031h\x1b[?1000h\x1b[?1004h\x1b[>1uClaude");
         screen.take_responses();
-        mark_restored(&mut screen, 6);
+        keep_restored(&mut screen, 6);
         assert!(!screen.alt_screen());
         assert!([2031, 1000, 1004].iter().all(|&m| !screen.dec_mode(m)));
         // The app setting its colors no longer types `997;1n` at the new shell's prompt.
