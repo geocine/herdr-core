@@ -157,7 +157,9 @@ fn windows_cwd_report(seq: &[u8]) -> Option<String> {
     let body = seq.strip_prefix(b"\x1b]9;9;")?;
     let body = body.strip_suffix(b"\x07").or_else(|| body.strip_suffix(b"\x1b\\"))?;
     let cwd = std::str::from_utf8(body).ok()?;
-    (cwd.len() >= 3 && cwd.as_bytes()[1] == b':' && cwd.as_bytes()[2] == b'\\'
+    (cwd.len() >= 3
+        && cwd.as_bytes()[1] == b':'
+        && cwd.as_bytes()[2] == b'\\'
         && cwd.as_bytes()[0].is_ascii_alphabetic())
     .then(|| cwd.to_owned())
 }

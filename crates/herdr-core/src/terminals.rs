@@ -23,6 +23,9 @@ pub struct Terminal {
     pub keep: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_cwd: Option<String>,
+    /// The agent to start again, in its resume mode, when this lost terminal comes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<Vec<String>>,
     /// Only caller overrides, never the inherited core environment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub restart_env: BTreeMap<String, String>,
@@ -263,6 +266,7 @@ impl Registry {
                 cwd: new.cwd,
                 keep: new.keep,
                 last_cwd: None,
+                resume: None,
                 restart_env: BTreeMap::new(),
                 restart_after_ms: 0,
                 restart_delay_ms: 0,
@@ -340,6 +344,13 @@ impl Registry {
             if let Some(f) = &t.foreground {
                 t.last_cwd = Some(f.cwd.clone());
             }
+            // An agent lost with its machine comes back resumed; anything else as a plain shell.
+            // (The foreground watcher keeps `resume` current, through a shutdown that ends the agent first.)
+            t.resume = if pending {
+                t.resume.take().or_else(|| t.foreground.as_ref().and_then(crate::resume::command))
+            } else {
+                None
+            };
             if pending {
                 t.schedule_restart(now_ms);
                 t.pid = None;
@@ -417,6 +428,7 @@ const PRIVATE: &[&str] = &[
     "win32_input",
     "afar",
     "last_cwd",
+    "resume",
     "restart_env",
     "restart_after_ms",
     "restart_delay_ms",
