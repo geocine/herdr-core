@@ -1032,9 +1032,11 @@ impl Pty {
         }
     }
 
-    /// No process groups on a pseudo console: the program it started.
+    /// No process groups on a pseudo console: the nearest program under the one
+    /// it started that isn't a shell (what the person ran there: an agent, an
+    /// editor), else the program it started.
     pub fn foreground(&self) -> i32 {
-        self.pid as i32
+        foreground_of(self.pid, &recent_processes()) as i32
     }
 
     /// Ctrl+C through the console for an interrupt; anything harder ends the
@@ -1049,6 +1051,117 @@ impl Pty {
 
     pub fn hang_up(&self, _pid: u32) {
         unsafe { TerminateJobObject(self.job.as_raw_handle() as HANDLE, 1) };
+    }
+}
+
+/// The process list as of the last two seconds. Listing every process takes
+/// milliseconds, so a thread refreshes it in the background and asking (from
+/// under the holder's lock, between output) only clones what it has.
+type Processes = Arc<Vec<(u32, u32, String)>>;
+
+fn recent_processes() -> Processes {
+    static LIST: std::sync::OnceLock<Arc<std::sync::Mutex<Processes>>> = std::sync::OnceLock::new();
+    let list = LIST.get_or_init(|| {
+        let list = Arc::new(std::sync::Mutex::new(Arc::new(processes())));
+        let shared = list.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let now = Arc::new(processes());
+                *shared.lock().unwrap_or_else(|p| p.into_inner()) = now;
+            }
+        });
+        list
+    });
+    list.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// Every process now: (pid, parent pid, file name), in the system's order.
+fn processes() -> Vec<(u32, u32, String)> {
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
+    let mut out = Vec::new();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return out;
+        }
+        let snap = OwnedHandle::from_raw_handle(snap as RawHandle);
+        let mut entry: PROCESSENTRY32W = zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+        let mut ok = Process32FirstW(snap.as_raw_handle() as HANDLE, &mut entry);
+        while ok != 0 {
+            let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+            out.push((
+                entry.th32ProcessID,
+                entry.th32ParentProcessID,
+                String::from_utf16_lossy(&entry.szExeFile[..len]),
+            ));
+            ok = Process32NextW(snap.as_raw_handle() as HANDLE, &mut entry);
+        }
+    }
+    out
+}
+
+/// The program a person runs under `root`: the nearest descendant that isn't a
+/// shell, else `root`. Git Bash keeps a `bash.exe` between a shell and each
+/// program it runs, so shells are walked through, not stopped at.
+pub(crate) fn foreground_of(root: u32, procs: &[(u32, u32, String)]) -> u32 {
+    let mut level = vec![root];
+    let mut seen = std::collections::HashSet::from([root]);
+    for _ in 0..8 {
+        let children: Vec<&(u32, u32, String)> =
+            procs.iter().filter(|(pid, parent, _)| level.contains(parent) && seen.insert(*pid)).collect();
+        if let Some((pid, _, _)) = children.iter().find(|(_, _, name)| !is_shell(name)) {
+            return *pid;
+        }
+        if children.is_empty() {
+            break;
+        }
+        level = children.iter().map(|(pid, _, _)| *pid).collect();
+    }
+    root
+}
+
+/// Shells and console helpers: what's under a program, never the program itself.
+fn is_shell(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    matches!(
+        name,
+        "bash"
+            | "sh"
+            | "dash"
+            | "zsh"
+            | "fish"
+            | "pwsh"
+            | "powershell"
+            | "cmd"
+            | "nu"
+            | "conhost"
+            | "openconsole"
+            | "winpty-agent"
+    )
+}
+
+#[cfg(test)]
+mod foreground_tests {
+    use super::foreground_of;
+
+    #[test]
+    fn the_program_under_git_bash_stubs_is_the_foreground() {
+        let p = |pid, parent, name: &str| (pid, parent, name.to_owned());
+        // Git's bash.exe launcher, the real bash, the stub bash it forks, then the agent.
+        let tree = [
+            p(10, 1, "bash.exe"),
+            p(11, 10, "bash.exe"),
+            p(12, 11, "bash.exe"),
+            p(13, 12, "node.exe"),
+            p(14, 13, "git.exe"),
+        ];
+        assert_eq!(foreground_of(10, &tree), 13);
+        assert_eq!(foreground_of(10, &tree[..3]), 10, "only shells: the shell itself");
+        assert_eq!(foreground_of(10, &[p(10, 1, "pwsh.exe"), p(20, 10, "conhost.exe"), p(21, 10, "claude.exe")]), 21);
+        assert_eq!(foreground_of(10, &[p(10, 1, "bash.exe"), p(30, 99, "codex.exe")]), 10, "another tree's program");
     }
 }
 
