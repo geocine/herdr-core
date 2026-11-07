@@ -216,10 +216,35 @@ paths start at your current folder. Prefer explicit paths for remote work.
   A missing `XAUTHORITY` file does not remove a display.
 - `hc keep <t>` (or `run --keep`) replaces a lost program with a shell,
   never reruns a task. The shell starts in its last folder, under its saved
-  screen (saved every 30 s while it prints). If Claude Code, Codex or
-  OpenCode was running, the shell starts it in its resume mode
-  (Claude Code: its own conversation, `claude --resume <id>`, read from
-  `~/.claude/sessions/<pid>.json`; `codex resume --last`; `opencode --continue`);
+  screen (saved every 30 s while it prints). If Claude Code, Codex,
+  OpenCode, pi or Grok was running, the shell starts it in its resume mode,
+  on that terminal's own conversation, so several in one folder each get
+  theirs back; one with nothing saved yet starts fresh.
+  `claude --resume <id>` (from `~/.claude/sessions/<pid>.json`).
+  `codex resume <id>` (the thread the codex process holds locked in
+  `~/.codex/thread-writer-locks`; read from its open files on Windows and
+  Linux; on macOS, or for a codex on a shared app server, `codex resume
+  --last`).
+  `grok --resume <id>` (from `~/.grok/active_sessions.json`; of several open,
+  the one opened or given a prompt last, so one switched back to with
+  `/resume` counts once it gets a prompt; `grok dashboard` for the dashboard).
+  `pi --session-id <id>`: a pi herdr starts (brought back, or `hc run pi`)
+  loads herdr's extension (`-e <state>/agents/pi-herdr.mjs`), which notes its
+  session at every start, `/new`, `/resume` and `/fork`: exact. A pi started
+  by hand is matched by its sessions' ids (one process's count up together)
+  and start time, from `~/.pi/agent/sessions/`: a session either of two pis
+  started within about a second could have made is nobody's until each has
+  one, and a pi `/resume`d to an old session while another runs there keeps
+  its own last one.
+  `opencode --session <id>` (from `~/.local/share/opencode/opencode.db`, read
+  through the system's SQLite): what its own run made or was prompted in, by
+  opencode's log (two started within a second of each other aren't told
+  apart that way), and the conversation its title shows; else, by start time.
+  A Linux release build can't load SQLite: there, its run's last from the log.
+  When the agent's record can't be read: the folder's last (`--continue`,
+  `codex resume --last`) only for the one such agent in the folder, else a
+  fresh one. Terminals that come back together never open the same
+  conversation: a second one starts its agent fresh.
   `resume_agents = false` in config.toml turns that off. `hc keep <t> --off` disables recovery. Signal death
   without an exit code is loss too. After a grace delay, recovery runs on
   every OS, including after a host shutdown. On macOS, shutdown warnings

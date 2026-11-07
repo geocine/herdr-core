@@ -27,9 +27,9 @@ pub struct Config {
     /// timeout on top), and to send anything at all before its line is
     /// given up and dialed again (default 30).
     pub machine_timeout: Option<f64>,
-    /// Start a known agent (Claude Code, Codex, OpenCode) again in its resume
-    /// mode when a kept terminal it ran in comes back after a reboot or crash
-    /// (default on). Off: a plain shell, as before.
+    /// Start a known agent (Claude Code, Codex, OpenCode, pi, Grok) again in
+    /// its resume mode when a kept terminal it ran in comes back after a reboot
+    /// or crash (default on). Off: a plain shell, as before.
     pub resume_agents: Option<bool>,
 }
 

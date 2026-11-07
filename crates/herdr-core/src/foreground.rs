@@ -161,7 +161,15 @@ impl Core {
                 let pgid = self.foreground(id).await;
                 let mut now = (pgid > 0).then(|| about(pgid)).flatten();
                 // Read before the lock: it may read an agent's session file.
-                let resume = now.as_ref().and_then(crate::resume::command);
+                let (title, argv, started_ms) = self
+                    .lock()
+                    .reg
+                    .terminals
+                    .get(&id)
+                    .map(|t| (t.title.clone(), t.argv.clone(), t.program_started_ms))
+                    .unwrap_or_default();
+                let context = crate::resume::Context { title: &title, argv: &argv, started_ms };
+                let resume = now.as_ref().and_then(|f| crate::resume::command(f, &context));
                 let mut st = self.lock();
                 #[cfg(windows)]
                 if let (Some(f), Some(t)) = (now.as_mut(), st.reg.terminals.get(&id))

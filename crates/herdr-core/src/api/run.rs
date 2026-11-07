@@ -15,7 +15,8 @@ pub(super) async fn terminal_run(core: Ctx<'_>, mut p: RunParams) -> Result<RunR
         // The shell is this machine's: the caller may be on another kind.
         (None, Some(line), true) => p.argv = crate::platform::shell_line(&line),
         (None, None, true) => p.argv = crate::config::load(&core.paths.config)?.shell()?,
-        (None, None, false) => {}
+        // An agent that can say which conversation it is in is told to (pi's extension).
+        (None, None, false) => p.argv = crate::resume::tracked(std::mem::take(&mut p.argv)),
         _ => return Err(RpcError::invalid_params("give argv or line, not both")),
     }
     let quiet_ready = template.as_ref().is_some_and(|t| t.ready_when_quiet);

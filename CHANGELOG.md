@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### New
+- A kept terminal that comes back after a reboot or crash resumes pi and Grok too, and every agent comes back to that terminal's own conversation, so several tabs running one agent in one folder each get theirs back, never another tab's.
+  - Codex now resumes the exact thread that tab had (`codex resume <id>`) instead of the folder's last one, on Windows and Linux. On macOS it still resumes the folder's last one, but only when it is the only Codex in that folder.
+  - pi started by herdr (brought back, or `hc run pi`) is exact, through a small extension herdr keeps in its own state folder. A pi you start yourself is matched by its session ids and start time. Two started within about a second of each other may come back on a new session instead of theirs, but never on each other's.
+  - OpenCode is matched by its own log, which says which conversations each process made or was given a prompt in, and by its title. Two started within a second of each other fall back to start time.
+  - Grok: with several sessions open in one tab, it resumes the one you opened or typed in last, not one a still-running turn keeps writing to.
+  - When an agent's record can't be read, the folder's last conversation goes only to the one tab with that agent there. Tabs that come back together never open the same conversation.
+
+### Fixed
+- On Windows, an agent started from Git Bash through a script (like the npm `pi`, `codex` and `opencode` commands) is now seen as the terminal's program, also when Git Bash starts it outside the terminal's job.
+- A terminal brought back with an agent comes back the same way if it is lost again before the agent has fully started.
+- A shell that a lost agent came back in no longer counts as that agent once the agent quits, so a later loss brings back a plain shell.
+
 ## [0.1.18] - 2026-11-04
 
 ### New

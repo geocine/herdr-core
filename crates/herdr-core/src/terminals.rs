@@ -351,7 +351,11 @@ impl Registry {
             // An agent lost with its machine comes back resumed; anything else as a plain shell.
             // (The foreground watcher keeps `resume` current, through a shutdown that ends the agent first.)
             t.resume = if pending {
-                t.resume.take().or_else(|| t.foreground.as_ref().and_then(crate::resume::command))
+                t.resume.take().or_else(|| {
+                    let context =
+                        crate::resume::Context { title: &t.title, argv: &t.argv, started_ms: t.program_started_ms };
+                    t.foreground.as_ref().and_then(|f| crate::resume::command(f, &context))
+                })
             } else {
                 None
             };

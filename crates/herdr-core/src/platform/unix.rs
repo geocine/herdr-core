@@ -213,6 +213,128 @@ pub fn parent_pid() -> u32 {
     std::os::unix::process::parent_id()
 }
 
+/// When process `pid` started, in ms since 1970; None if it is gone.
+#[cfg(target_os = "linux")]
+pub fn process_started_ms(pid: i32) -> Option<u64> {
+    // Field 22 of its stat, counted after the name (which can hold spaces):
+    // clock ticks after boot. Boot time is whole seconds, so this can be up to
+    // a second early; every process is early alike.
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let ticks: u64 = stat.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()?;
+    let boot: u64 = std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("btime ")?.trim().parse().ok())?;
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+    Some(boot * 1000 + ticks * 1000 / hz)
+}
+
+/// When process `pid` started, in ms since 1970; None if it is gone.
+#[cfg(target_os = "macos")]
+pub fn process_started_ms(pid: i32) -> Option<u64> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    if unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) } != size {
+        return None;
+    }
+    Some(info.pbi_start_tvsec * 1000 + info.pbi_start_tvusec / 1000)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn process_started_ms(_pid: i32) -> Option<u64> {
+    None
+}
+
+/// The full path of process `pid`'s program; None if it is gone.
+#[cfg(target_os = "linux")]
+pub fn process_path(pid: i32) -> Option<String> {
+    Some(std::fs::read_link(format!("/proc/{pid}/exe")).ok()?.display().to_string())
+}
+
+/// The full path of process `pid`'s program; None if it is gone.
+#[cfg(target_os = "macos")]
+pub fn process_path(pid: i32) -> Option<String> {
+    let mut buf = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn process_path(_pid: i32) -> Option<String> {
+    None
+}
+
+/// Process `pid`'s children now: pid and name.
+#[cfg(target_os = "linux")]
+pub fn child_processes(pid: i32) -> Vec<(i32, String)> {
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else { return Vec::new() };
+    let mut out: Vec<(i32, String)> = Vec::new();
+    for task in tasks.flatten() {
+        let children = std::fs::read_to_string(task.path().join("children")).unwrap_or_default();
+        for child in children.split_whitespace().filter_map(|c| c.parse::<i32>().ok()) {
+            if !out.iter().any(|(c, _)| *c == child) {
+                let name = std::fs::read_to_string(format!("/proc/{child}/comm")).unwrap_or_default();
+                out.push((child, name.trim_end().to_owned()));
+            }
+        }
+    }
+    out
+}
+
+/// Process `pid`'s children (not read here).
+#[cfg(not(target_os = "linux"))]
+pub fn child_processes(_pid: i32) -> Vec<(i32, String)> {
+    Vec::new()
+}
+
+/// The files process `pid` has open, by full path; None when they can't be read.
+#[cfg(target_os = "linux")]
+pub fn open_files(pid: i32) -> Option<Vec<String>> {
+    if pid <= 0 {
+        return None;
+    }
+    let fds = std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+    let files = fds
+        .flatten()
+        .filter_map(|fd| std::fs::read_link(fd.path()).ok())
+        .filter(|target| target.is_absolute())
+        .map(|target| target.display().to_string())
+        .collect();
+    Some(files)
+}
+
+/// The files process `pid` has open (not read here).
+#[cfg(not(target_os = "linux"))]
+pub fn open_files(_pid: i32) -> Option<Vec<String>> {
+    None
+}
+
+/// A function of the system's SQLite (libsqlite3), loaded the first time and
+/// kept loaded. None where there is none, and in a static build (the Linux
+/// release), which can't load libraries at all.
+pub fn sqlite_symbol(name: &std::ffi::CStr) -> Option<*const std::ffi::c_void> {
+    static LIB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let lib = *LIB.get_or_init(|| {
+        let names: &[&std::ffi::CStr] = if cfg!(target_os = "macos") {
+            &[c"/usr/lib/libsqlite3.dylib", c"libsqlite3.dylib"]
+        } else {
+            &[c"libsqlite3.so.0", c"libsqlite3.so"]
+        };
+        // SAFETY: NUL-terminated names; the library is never closed.
+        let lib = names.iter().map(|n| unsafe { libc::dlopen(n.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) });
+        lib.into_iter().find(|lib| !lib.is_null()).map_or(0, |lib| lib as usize)
+    });
+    if lib == 0 {
+        return None;
+    }
+    // SAFETY: the library is loaded; `name` is NUL-terminated.
+    let f = unsafe { libc::dlsym(lib as *mut std::ffi::c_void, name.as_ptr()) };
+    (!f.is_null()).then_some(f as *const std::ffi::c_void)
+}
+
+/// Unix folders differ by case.
+pub const PATHS_IGNORE_CASE: bool = false;
+
 pub fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
     status.signal()
 }
@@ -324,6 +446,23 @@ pub fn shell_line(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn reads_processes() {
+        let me = std::process::id() as i32;
+        let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+        assert_eq!(process_path(me).map(PathBuf::from), Some(exe));
+        assert!(process_started_ms(me).is_some());
+        assert_eq!(process_path(-1), None);
+    }
+
+    // macOS always has it; a static Linux build never can.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn loads_the_system_sqlite() {
+        assert!(sqlite_symbol(c"sqlite3_open_v2").is_some());
+    }
 
     fn dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("hc-{name}-{}", std::process::id()));

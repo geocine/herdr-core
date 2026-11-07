@@ -35,6 +35,8 @@ pub fn serve() -> io::Result<()> {
     let _shutdown_watch = platform::monitor_host_shutdown();
     // Adopt the holder's terminals before anyone can talk to us.
     let core = Core::start(paths, info)?;
+    // pi's extension, which agents herdr starts load, before any comes back.
+    crate::resume::prepare(&core.paths.state);
     let bound = AsyncListener::bind(&socket)?;
 
     tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {

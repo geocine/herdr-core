@@ -119,7 +119,23 @@ impl Core {
             .filter(|t| t.is_live() && t.keep && t.holder.is_none() && (startup || t.restart_after_ms <= now_ms()))
             .map(|t| t.id())
             .collect();
-        for id in ids {
+        // What each comes back in, never two on one conversation: not with each
+        // other, nor with one still running.
+        let running: Vec<(String, Option<Vec<String>>)> = st
+            .reg
+            .terminals
+            .values()
+            .filter(|t| t.is_live() && t.holder.is_some() && !ids.contains(&t.id()))
+            .map(|t| (t.last_cwd.clone().unwrap_or_else(|| t.cwd.clone()), t.resume.clone()))
+            .collect();
+        let mut plan: Vec<(String, Option<Vec<String>>)> = running.clone();
+        plan.extend(ids.iter().map(|id| {
+            let t = &st.reg.terminals[id];
+            (t.last_cwd.clone().unwrap_or_else(|| t.cwd.clone()), t.resume.clone().filter(|_| resume_agents))
+        }));
+        crate::resume::distinct(&mut plan);
+        let plan = plan.split_off(running.len());
+        for (id, (_, resume)) in ids.into_iter().zip(plan) {
             let Some(holder) = st.current() else { break };
             let instance = holder.instance.clone();
             let t = st.reg.terminals.get_mut(&id).expect("pending");
@@ -137,7 +153,10 @@ impl Core {
             t.scope = Some(scope);
             t.holder = Some(instance);
             // A lost agent comes back in its resume mode inside the shell; anything else as the shell.
-            let resume = t.resume.take().filter(|_| resume_agents);
+            // It stays the one to resume until the watcher sees the agent again (or the grace
+            // runs out): lost again right away, it comes back the same.
+            t.resume = resume.clone();
+            t.resume_gone_ms = None;
             t.argv = resume.and_then(|cmd| crate::resume::launch(&shell, &cmd)).unwrap_or_else(|| shell.clone());
             t.cwd = cwd.clone();
             t.template = None;
