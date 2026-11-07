@@ -155,6 +155,22 @@ fn version() -> String {
     env!("CARGO_PKG_VERSION").into()
 }
 
+/// What build.rs found in git (or was given): none without git.
+fn build_info() -> Option<BuildInfo> {
+    let text = |v: Option<&str>| v.filter(|v| !v.is_empty()).map(str::to_owned);
+    let count = |v: Option<&str>| v.and_then(|v| v.parse().ok());
+    let info = BuildInfo {
+        sha: text(option_env!("HERDR_BUILD_SHA")),
+        fork: text(option_env!("HERDR_BUILD_FORK")),
+        ahead: count(option_env!("HERDR_BUILD_AHEAD")),
+        tag: text(option_env!("HERDR_BUILD_TAG")),
+        upstream_version: text(option_env!("HERDR_BUILD_UPSTREAM_VERSION")),
+        upstream_sha: text(option_env!("HERDR_BUILD_UPSTREAM_SHA")),
+        behind: count(option_env!("HERDR_BUILD_BEHIND")),
+    };
+    (info != BuildInfo::default()).then_some(info)
+}
+
 fn resolve(core: &Core, address: &str) -> Result<u32, RpcError> {
     let local = crate::addr::local(address, &core.info.id, &core.info.name)?;
     core.lock().reg.resolve(local)
@@ -212,6 +228,7 @@ async fn server_status(core: Ctx<'_>, _: Empty) -> Result<StatusResult, RpcError
         live,
         finished: st.reg.terminals.len() - live,
         installed_by: crate::client::installed_by().map(String::from),
+        build: build_info(),
     })
 }
 

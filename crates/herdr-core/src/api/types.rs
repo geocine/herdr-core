@@ -148,6 +148,29 @@ pub struct StatusResult {
     /// system package manager): it updates hc, `hc update` won't.
     /// Null for a replaceable plain install.
     pub installed_by: Option<String>,
+    /// Where this build sits against upstream, from git when it was built.
+    /// Null for a build without git (and from older cores).
+    pub build: Option<BuildInfo>,
+}
+
+/// The upstream commit a build is based on and the fork on top. Any field
+/// may be null.
+#[derive(Serialize, JsonSchema, Clone, Default, PartialEq, Debug)]
+pub struct BuildInfo {
+    /// This build's commit (short).
+    pub sha: Option<String>,
+    /// The fork's name (its branch); null for upstream itself.
+    pub fork: Option<String>,
+    /// Commits on top of upstream.
+    pub ahead: Option<u64>,
+    /// The release tag on this commit.
+    pub tag: Option<String>,
+    /// The version in the upstream commit it's based on.
+    pub upstream_version: Option<String>,
+    /// The upstream commit it's based on (short): where it left upstream.
+    pub upstream_sha: Option<String>,
+    /// Commits upstream had after that, when it was built.
+    pub behind: Option<u64>,
 }
 
 #[derive(Deserialize, JsonSchema)]

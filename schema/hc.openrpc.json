@@ -29,6 +29,65 @@
         ],
         "type": "object"
       },
+      "BuildInfo": {
+        "description": "The upstream commit a build is based on and the fork on top. Any field\nmay be null.",
+        "properties": {
+          "ahead": {
+            "description": "Commits on top of upstream.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "behind": {
+            "description": "Commits upstream had after that, when it was built.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fork": {
+            "description": "The fork's name (its branch); null for upstream itself.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "description": "This build's commit (short).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tag": {
+            "description": "The release tag on this commit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upstream_sha": {
+            "description": "The upstream commit it's based on (short): where it left upstream.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upstream_version": {
+            "description": "The version in the upstream commit it's based on.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Children": {
         "enum": [
           "any",
@@ -986,6 +1045,17 @@
       },
       "StatusResult": {
         "properties": {
+          "build": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BuildInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where this build sits against upstream, from git when it was built.\nNull for a build without git (and from older cores)."
+          },
           "core": {
             "$ref": "#/components/schemas/CoreInfo"
           },

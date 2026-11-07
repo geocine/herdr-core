@@ -568,13 +568,16 @@ fn run(cmd: Option<Cmd>, json: bool, asked: bool) -> Result<Option<Out>, RpcErro
                 client::call(&stream, "server.status", json!({}))?
             };
             let id = r["core"]["id"].as_str().unwrap_or("?");
-            let human = format!(
+            let mut human = format!(
                 "core {} ({}) running, pid {}, up {}s",
                 r["core"]["name"].as_str().unwrap_or("?"),
                 id.get(..8).unwrap_or(id),
                 r["pid"],
                 r["uptime_ms"].as_u64().unwrap_or(0) / 1000
             );
+            if let Some(build) = build(&r["build"]) {
+                human += &format!("\nhc {}: {build}", r["version"].as_str().unwrap_or("?"));
+            }
             Out { json: r, human }
         }
         Cmd::Server { action: ServerCmd::Stop } => stop(&paths)?,

@@ -1,6 +1,8 @@
 pub mod addr;
 pub mod api;
 pub mod attach;
+#[cfg(test)]
+mod build_git;
 pub mod cli;
 pub mod client;
 pub mod config;
