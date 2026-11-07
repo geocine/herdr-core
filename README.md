@@ -5,7 +5,7 @@
 <h1 align="center">herdr-core — geocine fork</h1>
 
 <p align="center"><b>The Herdr core (<code>hc</code>), made for Windows.</b><br>
-It runs your terminals and agents. They keep running, even after a reboot.</p>
+It runs your terminals and agents, and brings them back after a reboot.</p>
 
 ---
 
