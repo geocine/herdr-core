@@ -226,7 +226,13 @@ mod windows_env;
 #[allow(dead_code)]
 mod windows_foreground;
 #[cfg(windows)]
+mod windows_proc;
+#[cfg(windows)]
 mod windows_session;
+#[cfg(windows)]
+pub use windows_proc::{
+    PATHS_IGNORE_CASE, child_processes, open_files, process_path, process_started_ms, sqlite_symbol,
+};
 
 /// Whether the host is shutting down (Windows also includes logout).
 pub fn host_shutdown_in_progress() -> bool {
