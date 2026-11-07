@@ -1,147 +1,49 @@
-# herdr-core (`hc`)
+# herdr-core (geocine fork)
 
-`hc` runs programs and coding agents in terminals that stay alive after you leave.
-Agents can start other agents, send them work, and hear back; you can attach to any terminal and take over.
+A fork of [herdrdev/herdr-core](https://github.com/herdrdev/herdr-core), the
+core (`hc`) that runs terminals and coding agents for Herdr. For what it is
+and how to use it, read **[the original README](https://github.com/herdrdev/herdr-core/blob/master/README.md)**.
 
-Core draws nothing. Use it from your shell, an agent, or your own app.
+The `geocine` branch is rebased on upstream `master`. It goes with the Herdr
+app fork, [geocine/herdr-app](https://github.com/geocine/herdr-app/tree/geocine).
 
-## Install
+## Install (Windows)
 
-Linux and macOS:
-
-```sh
-curl -fsSL https://releases.herdr.dev/core/install.sh | sh
-```
-
-Windows (PowerShell):
+Install it together with the app fork, in PowerShell:
 
 ```powershell
-powershell -c "irm https://releases.herdr.dev/core/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/geocine/herdr-app/geocine/distribution/install-geocine.ps1 | iex"
 ```
 
-Builds are available for Linux and macOS on x86_64 and aarch64, and Windows on x86_64.
-Linux builds are static. On Windows, templates and quoted shell commands need `sh` on PATH, such as Git for Windows provides.
+That installs the app and this core from the latest
+[fork release](https://github.com/geocine/herdr-app/releases), replacing an
+installed herdr-core in place (running terminals keep running). See
+[the app fork's README](https://github.com/geocine/herdr-app/tree/geocine#install-windows)
+for details.
 
-Run `hc update` to update. Running terminals keep running.
-See [security](docs/security.md) for the trust and signing details.
+## What's new in this fork
 
-## Run it and come back
+- **Kept terminals come back after a reboot** (or a logout or core crash),
+  with their screen, their folder and the agent that was running, in its
+  resume mode. A restored screen carries on right under its old lines.
+- **Each tab gets its own conversation back,** even with several tabs
+  running one agent in one folder:
+  - Claude Code (`claude --resume <id>`) and Codex (`codex resume <id>`) are
+    exact. Codex is exact on Windows and Linux.
+  - pi (`pi --session-id <id>`) is exact when herdr starts it. A pi you start
+    yourself is matched by its sessions.
+  - OpenCode (`opencode --session <id>`) is matched by its log and title.
+  - Grok (`grok --resume <id>`) is exact.
+  - When a tab's conversation can't be told for sure, the agent starts fresh
+    rather than open another tab's.
 
-```sh
-hc run cargo test                  # stream output and wait for it
-hc run --bg --name web bun dev     # start it and return
-hc ls                             # see live terminals
-hc attach web                     # take over; Ctrl+\ detaches
-hc read web --lines 100            # read without attaching
-```
+  `resume_agents = false` in config.toml turns this off.
+- **Windows: the program under the shell** is the terminal's foreground,
+  including agents started from Git Bash through npm scripts.
+- **Windows: Git Bash folders** are tracked from OSC 9;9 reports.
+- **Where the build sits:** `server.status` (and `hc server status`) says
+  which upstream commit the build is based on and how far the fork is ahead
+  of it.
 
-Closing your viewer does not end the program.
-A waiting run checks in after 180 seconds by default, leaving the program running.
-It prints the terminal's address so you can read it or wait again.
-
-For a terminal you want to keep even if its program is lost, use `hc run --keep`.
-Recovery starts a fresh shell, never reruns the task.
-A normal exit or an explicit kill still ends it.
-
-## Default shell
-
-With no program, `hc run --bg` starts the machine's shell: `$SHELL` (or
-`/bin/sh`) on Unix, PowerShell 7 on Windows if available, else Windows PowerShell.
-Override it in `~/.config/herdr-core/config.toml` (Windows:
-`%APPDATA%\herdr-core\config.toml`, or `$XDG_CONFIG_HOME/herdr-core/config.toml`
-when set):
-
-```toml
-shell = ["nu"]
-# Windows Git Bash (literal strings keep backslashes):
-# shell = ['C:\Program Files\Git\bin\bash.exe', '--login', '-i']
-```
-
-The list is an executable followed by separate arguments, without extra path
-quoting. It must contain a nonempty executable. Changes apply to the next new
-shell or `keep` recovery, including recovery after a restart; no restart is
-needed. Running terminals, explicit programs, and quoted command lines keep
-their behavior. A bad setting reports a config error; a shell that cannot start
-reports `spawn_failed`. Recovery stays pending and retries, with errors in
-`core.log` (config) or `holder.log` (spawn); it never silently falls back to another shell.
-
-## Agents run agents
-
-Give an agent `hc --skill`. It prints the agent docs in one read, including how to delegate, wait, report back, and clean up.
-
-[Templates](docs/templates.md) give an agent a command and a role.
-After saving the reviewer example from that page:
-
-```sh
-hc templates
-hc run --bg --name review reviewer "Review src/x.rs. Read-only."
-hc send review "Focus on the error path."
-hc read review --lines 100
-```
-
-Agents started inside an hc terminal become its children.
-They can report back with `hc send` and wait for their children with `hc wait --children all`.
-The parent gets notes when a child needs attention or ends.
-Children end with their parent unless started with `--outlive-parent`.
-On Unix, ending a terminal hangs up its program and foreground job, rather than
-hunting down detached programs. Programs deliberately detached with `nohup` or
-`setsid` can keep running, including background servers (their ports stay busy).
-An unexpected holder loss still uses inherited cleanup tokens to end abandoned
-programs, including detached ones. Windows keeps its job-object cleanup.
-Terminals kept alive through an update retain their old holder's behavior until
-recreated.
-
-## Every machine
-
-```sh
-hc machine add my-ssh-host --name box
-hc run --on box --cwd /srv/app cargo test
-hc attach box/t3
-```
-
-Use the address returned by your run, not the example's `box/t3`.
-Programs and files stay on that machine. Your local core brings its terminals into the same list.
-[Machines](docs/machines.md) covers SSH, custom connections, remote files, and reconnecting.
-
-## Status comes from the program
-
-An agent can say it is working, done, blocked, or in error through OSC 7501, the Program Status Protocol.
-Core stores what it reports. It does not guess from screen text or recognize agent brands.
-A program that does not report status has none.
-
-Use `hc get review` for a snapshot or `hc events` to follow changes.
-
-## Build your own client
-
-`hc schema` prints the request/response API as OpenRPC with JSON Schema.
-[The API docs](schema/README.md) cover connecting, terminal streams, events, and status.
-Use `hc connect` to carry the protocol over stdin and stdout, including through SSH.
-
-## Docs
-
-- [Commands](docs/commands.md): generated from the binary's help.
-- [Machines](docs/machines.md): work across machines.
-- [Templates](docs/templates.md): reusable agent roles.
-- [Security](docs/security.md): access, state, and updates.
-- [API](schema/README.md): build a client.
-
-For a quick lookup, run `hc --help` or a command's help, such as `hc run --help`.
-For agents, use `hc --skill`.
-
-## Build from source
-
-You need Rust, Zig 0.16, and just. CI pins the Rust version in [.github/workflows/ci.yml](.github/workflows/ci.yml).
-
-```sh
-git submodule update --init --depth 1
-cargo build --locked -p herdr-core
-just check
-```
-
-`just install` installs this checkout and restarts your core. Running terminals keep running.
-`just docs` refreshes the command reference. `just docs-check` checks it and the examples; CI runs the same tests.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor setup and checks.
-
-License: [Apache-2.0](LICENSE). `hc --licenses` prints the included third-party licenses.
-After a dependency change, regenerate them with `just notices`.
+To build from source, see
+[the original README](https://github.com/herdrdev/herdr-core/blob/master/README.md#build-from-source).
