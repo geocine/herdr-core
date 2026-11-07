@@ -303,3 +303,71 @@ pub(super) fn exec_out(r: &Value) -> ! {
     let _ = err.flush();
     std::process::exit(code)
 }
+
+/// Where a core's build sits against upstream (`server.status`'s `build`),
+/// in one line; none from a build without git or an older core.
+pub(super) fn build(b: &Value) -> Option<String> {
+    let commits = |n: u64| format!("{n} commit{}", if n == 1 { "" } else { "s" });
+    let (sha, fork, tag) = (b["sha"].as_str(), b["fork"].as_str(), b["tag"].as_str());
+    let ahead = b["ahead"].as_u64().unwrap_or(0);
+    let mut parts = Vec::new();
+    let at: Vec<String> =
+        [b["upstream_version"].as_str().map(String::from), b["upstream_sha"].as_str().map(|s| format!("at {s}"))]
+            .into_iter()
+            .flatten()
+            .collect();
+    if !at.is_empty() {
+        let since = match b["behind"].as_u64() {
+            Some(0) => ", its latest when built".into(),
+            Some(n) => format!(", {} behind when built", commits(n)),
+            None => String::new(),
+        };
+        parts.push(format!("upstream {}{since}", at.join(" ")));
+    }
+    if ahead > 0 || fork.is_some() {
+        let mut part = format!("fork {}", fork.unwrap_or("?"));
+        if let Some(sha) = sha {
+            part += &format!(" at {sha}");
+        }
+        if ahead > 0 {
+            part += &format!(", {} ahead", commits(ahead));
+        }
+        parts.push(part);
+    } else if let Some(sha) = sha.filter(|_| at.is_empty()) {
+        parts.push(format!("commit {sha}"));
+    }
+    if let Some(tag) = tag {
+        parts.push(format!("release {tag}"));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_build_says_where_it_sits_in_one_line() {
+        let fork = json!({"sha": "dba5a5d", "fork": "geocine", "ahead": 7, "tag": null, "upstream_version": "0.1.18", "upstream_sha": "c6b316f", "behind": 0});
+        assert_eq!(
+            build(&fork).as_deref(),
+            Some("upstream 0.1.18 at c6b316f, its latest when built; fork geocine at dba5a5d, 7 commits ahead")
+        );
+        let release = json!({"sha": "dba5a5d", "fork": "geocine", "ahead": 1, "tag": "geocine-20261106-2310", "upstream_version": "0.1.18", "upstream_sha": "c6b316f", "behind": 1});
+        assert_eq!(
+            build(&release).as_deref(),
+            Some(
+                "upstream 0.1.18 at c6b316f, 1 commit behind when built; fork geocine at dba5a5d, 1 commit ahead; release geocine-20261106-2310"
+            )
+        );
+        let upstream = json!({"sha": "c6b316f", "fork": null, "ahead": 0, "tag": "v0.1.18", "upstream_version": "0.1.18", "upstream_sha": "c6b316f", "behind": 0});
+        assert_eq!(
+            build(&upstream).as_deref(),
+            Some("upstream 0.1.18 at c6b316f, its latest when built; release v0.1.18")
+        );
+        assert_eq!(build(&json!({"sha": "abc1234"})).as_deref(), Some("commit abc1234"));
+        for nothing in [Value::Null, json!({}), json!({"ahead": 0})] {
+            assert_eq!(build(&nothing), None, "{nothing}");
+        }
+    }
+}
