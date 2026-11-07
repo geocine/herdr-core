@@ -147,7 +147,7 @@ mod windows_proc;
 mod windows_session;
 #[cfg(windows)]
 pub use windows_proc::{
-    PATHS_IGNORE_CASE, child_processes, open_files, process_path, process_started_ms, sqlite_symbol,
+    PATHS_IGNORE_CASE, agent_under_shell, child_processes, open_files, process_path, process_started_ms, sqlite_symbol,
 };
 
 /// Whether the host is shutting down (Windows also includes logout).

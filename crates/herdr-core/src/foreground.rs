@@ -158,7 +158,9 @@ impl Core {
             tokio::time::sleep(Duration::from_millis(ms)).await;
             let live: Vec<u32> = self.lock().reg.terminals.values().filter(|t| t.is_live()).map(|t| t.id()).collect();
             for id in live {
-                let pgid = self.foreground(id).await;
+                // A holder from an older build (it keeps its terminals across a core update)
+                // may name the shell where this core would see the agent under it.
+                let pgid = crate::platform::agent_under_shell(self.foreground(id).await);
                 let mut now = (pgid > 0).then(|| about(pgid)).flatten();
                 // Read before the lock: it may read an agent's session file.
                 let (title, argv, started_ms) = self

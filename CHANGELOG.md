@@ -12,6 +12,7 @@
 
 ### Fixed
 - On Windows, an agent started from Git Bash through a script (like the npm `pi`, `codex` and `opencode` commands) is now seen as the terminal's program, also when Git Bash starts it outside the terminal's job.
+- That also holds for terminals opened before a core update: their holder, still the older build, named the shell, so such an agent was never seen and came back after a reboot as a plain shell.
 - A terminal brought back with an agent comes back the same way if it is lost again before the agent has fully started.
 - A shell that a lost agent came back in no longer counts as that agent once the agent quits, so a later loss brings back a plain shell.
 

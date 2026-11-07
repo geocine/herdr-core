@@ -327,6 +327,22 @@ pub(crate) fn foreground_of(
         .map_or(root, |(_, program)| program)
 }
 
+/// The agent a terminal runs when its holder named the shell `root`: a holder
+/// keeps its terminals across a core update, and one from an older build may
+/// not look past a shell the way `foreground_of` does (an agent Git Bash runs
+/// from an npm shim). The same search, by the terminal's console instead of its
+/// job (which only the holder has); `root` when there is none, or `root` is no
+/// shell.
+pub fn agent_under_shell(root: i32) -> i32 {
+    let procs = recent_processes();
+    let Some((_, _, name)) = procs.iter().find(|(pid, _, _)| *pid as i32 == root) else { return root };
+    if root <= 0 || !is_shell(name) {
+        return root;
+    }
+    let agent = |pid: u32| crate::foreground::about(pid as i32).is_some_and(|f| crate::resume::interactive_agent(&f));
+    foreground_of(root as u32, &procs, &[], agent, console_host) as i32
+}
+
 /// The nearest program under `root` that isn't a shell, else `root`.
 fn nearest_program(root: u32, procs: &[(u32, u32, String)]) -> u32 {
     let mut level = vec![root];
@@ -463,6 +479,13 @@ mod tests {
         assert!(process_started_ms(me).is_some_and(|ms| ms <= crate::runtime::now_ms()));
         assert_eq!(process_path(-1), None);
         assert!(sqlite_symbol(c"sqlite3_open_v2").is_some(), "every Windows has winsqlite3.dll");
+    }
+
+    #[test]
+    fn only_a_shell_is_looked_under() {
+        let me = std::process::id() as i32;
+        assert_eq!(agent_under_shell(me), me, "not a shell");
+        assert_eq!(agent_under_shell(-1), -1, "no answer from the holder");
     }
 
     #[test]

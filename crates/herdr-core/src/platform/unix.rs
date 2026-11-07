@@ -213,6 +213,11 @@ pub fn parent_pid() -> u32 {
     std::os::unix::process::parent_id()
 }
 
+/// The foreground process group already is the program the person runs.
+pub fn agent_under_shell(root: i32) -> i32 {
+    root
+}
+
 /// When process `pid` started, in ms since 1970; None if it is gone.
 #[cfg(target_os = "linux")]
 pub fn process_started_ms(pid: i32) -> Option<u64> {
