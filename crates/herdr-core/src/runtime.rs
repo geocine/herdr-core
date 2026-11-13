@@ -43,6 +43,8 @@ pub struct Core {
     save_due: Notify,
     pub(crate) image_due: Notify,
     registry_writer: RegistryWriter,
+    /// A kept terminal's program ended by itself: `settle_exits` judges it shortly.
+    pub(crate) settle_due: Notify,
 }
 
 #[derive(Default)]
@@ -82,6 +84,9 @@ pub struct State {
     pub holders: Vec<Link>,
     pub pending: HashMap<u32, oneshot::Sender<Result<crate::terminals::Terminal, String>>>,
     pub killing: HashSet<u32>,
+    /// Kept terminals whose program ended by itself, and when: judged together a moment
+    /// later (`settle_exits`), so several ending at once count as swept away, not finished.
+    pub settling: Vec<(u32, Exit, Instant)>,
     pub stopping: bool,
     pub machines: Vec<crate::machines::Machine>,
     /// The line to each machine, by its core id, and the task keeping it up.
@@ -157,7 +162,7 @@ pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
-fn finish_reason(killed: bool, stopping: bool, host_shutdown: bool) -> &'static str {
+pub(crate) fn finish_reason(killed: bool, stopping: bool, host_shutdown: bool) -> &'static str {
     if killed {
         "killed"
     } else if stopping {
@@ -201,6 +206,7 @@ impl Core {
             dirty: Default::default(),
             save_due: Notify::new(),
             image_due: Notify::new(),
+            settle_due: Notify::new(),
         });
         core.attach_all()?;
         Ok(core)
@@ -752,6 +758,17 @@ impl Core {
         let reason = finish_reason(st.killing.contains(&id), st.stopping, platform::host_shutdown_in_progress());
         if let Some(link) = st.link(id) {
             link.send(&proto::frame(proto::RELEASE, id, &[]));
+        }
+        // A kept terminal's program that ended by itself waits a moment before it counts as
+        // finished: several ending together were swept away (an installer closing every Git
+        // Bash, say), and come back the way they would after a reboot (see `judge_exits`).
+        if reason == "exited"
+            && st.reg.terminals.get(&id).is_some_and(|t| t.keep && t.is_live())
+            && !st.settling.iter().any(|(s, _, _)| *s == id)
+        {
+            st.settling.push((id, exit, Instant::now()));
+            self.settle_due.notify_one();
+            return;
         }
         self.record_finish(st, id, exit, reason);
         self.save(st);
