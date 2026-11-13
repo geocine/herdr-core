@@ -712,6 +712,46 @@ fn remove_root(root: impl AsRef<std::path::Path>) {
     }
 }
 
+#[tokio::test]
+async fn kept_terminals_ending_together_come_back_and_one_alone_finishes() {
+    use crate::terminals::NewTerminal;
+    let (core, root) = test_core();
+    {
+        let mut st = core.lock();
+        let kept = |st: &mut State| {
+            st.reg.create(NewTerminal { argv: vec!["sh".into()], keep: true, ..Default::default() }, now_ms()).unwrap()
+        };
+        let (a, b, c) = (kept(&mut st), kept(&mut st), kept(&mut st));
+        let plain = st.reg.create(NewTerminal { argv: vec!["sh".into()], ..Default::default() }, now_ms()).unwrap();
+        let exit = Exit { code: Some(0), signal: None };
+
+        // Not kept: finished at once, as always.
+        core.finish(&mut st, plain, exit);
+        assert!(!st.reg.terminals[&plain].is_live());
+
+        // Two kept ones ending together (an installer closing every Git Bash) wait, then come back.
+        core.finish(&mut st, a, exit);
+        core.finish(&mut st, b, exit);
+        assert!(st.reg.terminals[&a].is_live() && st.reg.terminals[&b].is_live(), "judged later");
+        let at = Instant::now();
+        assert!(core.judge_exits(&mut st, at).is_some(), "not settled yet");
+        assert_eq!(core.judge_exits(&mut st, at + Duration::from_secs(2)), None);
+        for id in [a, b] {
+            let t = &st.reg.terminals[&id];
+            assert!(t.is_live() && t.holder.is_none(), "lost, to be restarted");
+            assert_eq!(t.reason.as_deref(), Some("swept"));
+        }
+
+        // One ending alone (`exit` typed) finishes.
+        core.finish(&mut st, c, exit);
+        assert_eq!(core.judge_exits(&mut st, Instant::now() + Duration::from_secs(2)), None);
+        assert!(!st.reg.terminals[&c].is_live());
+        assert_eq!(st.reg.terminals[&c].reason.as_deref(), Some("exited"));
+    }
+    drop(core);
+    remove_root(&root);
+}
+
 /// What a subscriber hears when a holder whose program reported `tail` while
 /// unwatched is adopted after a crash or a failed read (not a handover).
 fn status_events_on_crash_adoption(tail: &[u8]) -> Vec<Value> {

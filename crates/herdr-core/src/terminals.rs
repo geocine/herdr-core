@@ -347,7 +347,7 @@ impl Registry {
             let pending = t.keep
                 && matches!(
                     reason,
-                    "holder_lost" | "stopped_by_restart" | "server_stop" | "host_shutdown" | "signaled"
+                    "holder_lost" | "stopped_by_restart" | "server_stop" | "host_shutdown" | "signaled" | "swept"
                 );
             t.state = if pending { "live" } else { "finished" }.into();
             if let Some(f) = &t.foreground {

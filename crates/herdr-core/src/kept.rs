@@ -5,6 +5,11 @@ use crate::terminals::{KEEP_RETRY_MS, Terminal};
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+/// Kept terminals whose programs end within this of each other (by themselves, not
+/// killed) were swept away together: they come back instead of finishing.
+pub(crate) const SWEEP_WINDOW: Duration = Duration::from_millis(1500);
 
 impl Terminal {
     pub(crate) fn schedule_restart(&mut self, now: u64) {
@@ -30,6 +35,61 @@ impl Terminal {
 const RESTORED: &[u8] = b"\x1b[0m\r\n\x1b[2m-- the program above ended; this is a new shell --\x1b[0m\r\n";
 
 impl Core {
+    /// Judges kept terminals' own exits once they settle (`finish` queues them).
+    pub(crate) async fn settle_exits(self: Arc<Self>) {
+        loop {
+            self.settle_due.notified().await;
+            loop {
+                let wait = {
+                    let mut st = self.lock();
+                    self.judge_exits(&mut st, Instant::now())
+                };
+                match wait {
+                    Some(wait) => tokio::time::sleep(wait).await,
+                    None => break,
+                }
+            }
+        }
+    }
+
+    /// Finishes the queued exits whose run has settled: a run is exits each within
+    /// `SWEEP_WINDOW` of the one before, settled once none came for a window. Two or
+    /// more in a run were swept away (an installer, a session closing every console):
+    /// they come back like after a reboot, agents resumed. One alone finished as usual.
+    /// Returns how long until the next run can be judged.
+    pub(crate) fn judge_exits(&self, st: &mut crate::runtime::State, now: Instant) -> Option<Duration> {
+        loop {
+            if st.settling.is_empty() {
+                return None;
+            }
+            st.settling.sort_by_key(|(_, _, at)| *at);
+            let mut n = 1;
+            while n < st.settling.len() && st.settling[n].2.duration_since(st.settling[n - 1].2) <= SWEEP_WINDOW {
+                n += 1;
+            }
+            let quiet = now.saturating_duration_since(st.settling[n - 1].2);
+            if quiet < SWEEP_WINDOW {
+                return Some(SWEEP_WINDOW - quiet);
+            }
+            let run: Vec<_> = st.settling.drain(..n).collect();
+            let swept = run.len() >= 2;
+            for (id, exit, _) in run {
+                let reason = crate::runtime::finish_reason(
+                    st.killing.contains(&id),
+                    st.stopping,
+                    crate::platform::host_shutdown_in_progress(),
+                );
+                let reason = if reason == "exited" && swept { "swept" } else { reason };
+                if reason == "swept" {
+                    eprintln!("core: {} ended with others at once: kept, it comes back", crate::terminals::address(id));
+                }
+                self.record_finish(st, id, exit, reason);
+            }
+            self.save(st);
+            self.changed.notify_waiters();
+        }
+    }
+
     /// Saves each kept terminal's screen every 30 s when it printed since (in a pause), so
     /// one lost with its machine (a reboot) comes back with its history.
     pub(crate) async fn keep_screens(self: Arc<Self>) {

@@ -172,7 +172,10 @@ the claim and retries if kept, or finishes if keep was disabled.
 
 `reason` on a finished terminal: `exited`, `killed`, `server_stop`,
 `host_shutdown`, `holder_lost`, `stopped_by_restart`. Kept live records may
-also have `reason: "signaled"` while waiting for a new shell. `seq` rises by one per event, in order. A `heartbeat`
+also have `reason: "signaled"` while waiting for a new shell, or `reason: "swept"`:
+a kept terminal's program that ends by itself is judged 1.5 s later, and two or more
+ending within 1.5 s of each other (an installer closing every console) come back like
+after a reboot instead of finishing; one alone finishes (`exited`). `seq` rises by one per event, in order. A `heartbeat`
 arrives every 15 s with the current `seq` (when no events are queued for you). A subscriber that falls behind
 gets `missed` with a fresh snapshot: drop events whose `seq` is not above
 it. `seq` restarts with each core process; take a fresh snapshot after
