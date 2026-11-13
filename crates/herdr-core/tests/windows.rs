@@ -1017,5 +1017,7 @@ fn a_lost_kept_terminal_shows_what_its_program_left_above_the_new_shell() {
     wait_until("new shell answers", || text(&t).contains("after-2"));
     let text = text(&t);
     let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("{needle:?} missing: {text:?}"));
-    assert!(at("left-on-screen") < at("this is a new shell") && at("this is a new shell") < at("after-2"), "{text:?}");
+    // geocine: the new shell carries on under the old lines, with no divider (resume::keep_restored).
+    assert!(at("left-on-screen") < at("after-2"), "{text:?}");
+    assert!(!text.contains("this is a new shell"), "{text:?}");
 }

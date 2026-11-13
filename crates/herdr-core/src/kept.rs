@@ -32,6 +32,8 @@ impl Terminal {
 }
 
 /// Under what the lost program left on screen, so it isn't taken for something still running.
+// geocine: screens come back through `resume::keep_restored`; upstream's divider stays unused.
+#[allow(dead_code)]
 const RESTORED: &[u8] = b"\x1b[0m\r\n\x1b[2m-- the program above ended; this is a new shell --\x1b[0m\r\n";
 
 impl Core {
