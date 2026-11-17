@@ -155,7 +155,31 @@ fn shell_root(root: &Foreground) -> bool {
     matches!(name, "sh" | "bash" | "zsh" | "fish" | "nu" | "dash" | "ksh" | "tcsh")
 }
 
+/// The program in front ended and the terminal's own process (its shell) is
+/// back: whatever ran on top, even through ssh, is gone.
+fn back_at_root(before: Option<&Foreground>, now: Option<&Foreground>, root: Option<u32>) -> bool {
+    let at_root = |f: &Foreground| Some(f.pid as u32) == root;
+    before.is_some_and(|b| !at_root(b)) && now.is_some_and(at_root)
+}
+
+/// Modes a program turns on for itself that make the terminal type for it:
+/// mouse reports (and their encodings) and focus events. A program that dies
+/// (a dropped ssh) never turns them off, and its shell gets the reports as typing.
+const LEFT_MODES: [u16; 5] = [9, 1000, 1002, 1003, 1004];
+const LEFT_MODES_OFF: &[u8] =
+    b"\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l";
+
 impl Core {
+    /// Turns off the modes a program left on, on the screen and in every viewer,
+    /// as if the program had: through the same path as its output.
+    fn drop_left_modes(self: &Arc<Self>, st: &mut crate::runtime::State, id: u32) {
+        let left = st.screens.get(&id).is_some_and(|s| LEFT_MODES.iter().any(|m| s.dec_mode(*m)));
+        let between = st.relays.get(&id).is_some_and(|r| !r.idle());
+        if left && !between {
+            self.output(st, id, LEFT_MODES_OFF);
+        }
+    }
+
     /// Keeps every live terminal's `foreground` current, with an event on each change.
     pub async fn watch_foreground(self: Arc<Self>) {
         let ms = std::env::var("HC_FOREGROUND_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(500);
@@ -210,10 +234,14 @@ impl Core {
                     crate::status::reset(t)
                 });
                 let foreground_changed = t.foreground != now;
+                let left = back_at_root(t.foreground.as_ref(), now.as_ref(), t.pid);
                 if let Some(f) = &now {
                     t.last_cwd = Some(f.cwd.clone());
                 }
                 t.foreground = now.clone();
+                if left {
+                    self.drop_left_modes(&mut st, id);
+                }
                 if change.is_some() || foreground_changed {
                     self.save_soon();
                 }
@@ -231,6 +259,24 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modes_a_dead_program_left_on_are_turned_off_when_its_shell_is_back() {
+        let f = |pid: i32| Foreground { pid, name: "x".into(), argv: vec![], cwd: "/".into() };
+        let (shell, ssh) = (f(10), f(11));
+        assert!(back_at_root(Some(&ssh), Some(&shell), Some(10)), "ssh ended");
+        assert!(!back_at_root(Some(&shell), Some(&ssh), Some(10)), "a program starts");
+        assert!(!back_at_root(Some(&shell), Some(&shell), Some(10)), "nothing changed");
+        assert!(!back_at_root(None, Some(&shell), Some(10)), "first look");
+        assert!(!back_at_root(Some(&ssh), None, Some(10)), "unreadable");
+
+        let mut screen = ghostty_vt::Terminal::new(80, 24, 1 << 16);
+        screen.write(b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h\x1b[?2004h");
+        assert!(LEFT_MODES.iter().any(|m| screen.dec_mode(*m)));
+        screen.write(LEFT_MODES_OFF);
+        assert!(LEFT_MODES.iter().chain(&[1006]).all(|m| !screen.dec_mode(*m)), "mouse and focus off");
+        assert!(screen.dec_mode(2004), "the shell's own bracketed paste stays");
+    }
 
     #[test]
     fn command_flags_keep_shell_roots_from_clearing_live_status() {
