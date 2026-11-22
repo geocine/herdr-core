@@ -113,6 +113,11 @@ pub fn remove_endpoint(path: &Path) {
 
 // --- Files -----------------------------------------------------------------
 
+/// Terminals hand programs a paste whole (bracketed): the paste gap is enough.
+pub fn paste_settle(_len: usize) -> Option<std::time::Duration> {
+    None
+}
+
 /// Default homes for state and config (XDG_STATE_HOME / XDG_CONFIG_HOME win).
 pub fn data_dirs() -> (PathBuf, PathBuf) {
     let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/".into()));

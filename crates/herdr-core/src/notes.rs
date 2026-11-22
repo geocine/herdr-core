@@ -273,14 +273,11 @@ impl Core {
                 let mut text: Vec<String> =
                     kids.iter().map(|id| self.note_for(st, *id, &st.reg.terminals[id].address)).collect();
                 text.extend(afar.iter().cloned());
-                let bracketed = st.screens.get(&parent).is_some_and(|s| s.dec_mode(2004));
+                let screen = st.screens.get(&parent).expect("live terminal has a screen");
                 let told = kids.iter().map(|id| (*id, st.reg.terminals[id].news)).collect();
-                let steps = vec![
-                    Step::Write(paste(bracketed, &text.join("\n"))),
-                    Step::Pause(crate::input::PASTE_GAP),
-                    Step::Write(b"\r".to_vec()),
-                ];
-                Ok((told, steps))
+                // Submitted as `hc send` submits: the parent's template's key and gap.
+                let typed = Step::Write(paste(screen.dec_mode(2004), &text.join("\n")));
+                Ok((told, crate::input::paste_and_submit(screen, t, typed)?))
             })
             .await;
         let told: Vec<(u32, u64)> = match typed {

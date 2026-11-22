@@ -257,6 +257,8 @@ pub enum Step {
     Write(Vec<u8>),
     Pause(Duration),
     EndDraft(Vec<u8>),
+    /// Waits, at most this long, for the program to draw what was just written and go quiet.
+    Settle(Duration),
 }
 
 pub(crate) fn env_ms(var: &str, default: u64) -> Duration {
@@ -287,6 +289,35 @@ fn working(t: &Terminal) -> bool {
 
 fn state_word(t: &Terminal) -> Option<String> {
     t.status.as_ref().map(|s| s.state.clone())
+}
+
+/// A paste, then the key that submits it. A template may say which key and how long
+/// to pause between (default: Enter after 200 ms); where the OS types a paste in as
+/// keys (`platform::paste_settle`), the key also waits for the program to take it in.
+pub fn paste_and_submit(screen: &ghostty_vt::Terminal, t: &Terminal, paste: Step) -> Result<Vec<Step>, RpcError> {
+    let submit = match &t.submit {
+        Some(key) => crate::keys::encode(screen, key)?,
+        None => b"\r".to_vec(),
+    };
+    let gap = t.paste_gap_ms.map_or(PASTE_GAP, Duration::from_millis);
+    let len = match &paste {
+        Step::FirstTask(b) | Step::Write(b) | Step::EndDraft(b) => b.len(),
+        _ => 0,
+    };
+    let mut steps = vec![paste, Step::Pause(gap)];
+    steps.extend(crate::platform::paste_settle(len).map(Step::Settle));
+    steps.push(Step::Write(submit));
+    Ok(steps)
+}
+
+/// How long a program must stay quiet after drawing a paste before it's taken in.
+const SETTLE_QUIET: Duration = Duration::from_millis(300);
+
+/// Whether a paste written at `wrote` has been taken in by `now`: the program drew
+/// since, then stayed quiet; or `most` has passed (it may never draw the paste).
+fn settled(wrote: Instant, last_output: Option<Instant>, now: Instant, most: Duration) -> bool {
+    now.duration_since(wrote) >= most
+        || last_output.is_some_and(|at| at > wrote && now.duration_since(at) >= SETTLE_QUIET)
 }
 
 /// A paste the way a terminal sends one: bracketed when the program asked.
@@ -373,7 +404,11 @@ impl Core {
                 tokio::time::sleep(left.min(Duration::from_millis(25))).await;
             }
         };
+        let mut wrote = Instant::now();
         for step in steps {
+            if matches!(step, Step::FirstTask(_) | Step::Write(_) | Step::EndDraft(_)) {
+                wrote = Instant::now();
+            }
             match step {
                 Step::FirstTask(bytes) => {
                     let mut st = self.lock();
@@ -392,6 +427,11 @@ impl Core {
                     }
                 }
                 Step::Pause(d) => tokio::time::sleep(d).await,
+                Step::Settle(most) => {
+                    while !settled(wrote, self.lock().last_output.get(&id).copied(), Instant::now(), most) {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }
             }
         }
         let mut st = self.lock();
@@ -456,16 +496,9 @@ impl Core {
                     ));
                 }
                 let screen = st.screens.get(&id).expect("live terminal has a screen");
-                // A template may say how its agent submits (default: Enter after 200 ms).
-                let submit = match &t.submit {
-                    Some(key) => crate::keys::encode(screen, key)?,
-                    None => b"\r".to_vec(),
-                };
-                let gap = t.paste_gap_ms.map_or(PASTE_GAP, Duration::from_millis);
                 let bytes = paste(screen.dec_mode(2004), text);
                 let paste = if first_task { Step::FirstTask(bytes) } else { Step::Write(bytes) };
-                let steps = vec![paste, Step::Pause(gap), Step::Write(submit)];
-                Ok(((word, t.turn, t.reported), steps))
+                Ok(((word, t.turn, t.reported), paste_and_submit(screen, t, paste)?))
             })
             .await?;
         let started = if reported {
@@ -711,5 +744,17 @@ mod tests {
         assert_eq!(paste(true, "hi"), b"\x1b[200~hi\x1b[201~");
         assert_eq!(paste(false, "hi"), b"hi");
         assert_eq!(paste(true, "a\x1b[201~b"), b"\x1b[200~ab\x1b[201~");
+    }
+
+    #[test]
+    fn a_paste_is_taken_in_once_drawn_and_quiet_or_after_the_bound() {
+        let wrote = Instant::now();
+        let ms = |n| wrote + Duration::from_millis(n);
+        let most = Duration::from_secs(3);
+        assert!(!settled(wrote, None, ms(1000), most), "not drawn yet");
+        assert!(!settled(wrote, Some(wrote - Duration::from_millis(500)), ms(1000), most), "drawn before the paste");
+        assert!(!settled(wrote, Some(ms(900)), ms(1000), most), "still drawing");
+        assert!(settled(wrote, Some(ms(600)), ms(1000), most), "drawn, then quiet");
+        assert!(settled(wrote, None, ms(3000), most), "never drawn: the bound");
     }
 }

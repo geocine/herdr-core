@@ -372,6 +372,15 @@ pub fn data_dirs() -> (PathBuf, PathBuf) {
 /// Pipe names: up to 256 characters.
 pub const MAX_SOCKET_PATH: usize = 256;
 
+/// The console hands a program a paste as keypresses, and a TUI takes them in a while
+/// (Codex: about 2.5 s for 1.8 KB, redrawing as it goes); an Enter that comes before it
+/// is done lands in the draft as a new line. Submitting waits for the program to draw
+/// the paste and go quiet, at most this long for `len` bytes.
+pub fn paste_settle(len: usize) -> Option<std::time::Duration> {
+    let ms = 3000 + 2 * len as u64;
+    Some(std::time::Duration::from_millis(ms.min(30_000)))
+}
+
 pub fn endpoints(_state: &Path) -> (PathBuf, String) {
     let user: String =
         std::env::var("USERNAME").unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
